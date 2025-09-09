@@ -43,7 +43,10 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
     claimableAmount: claimableAmountData, 
     claimTokens,
     tokenAddress,
-    vestingTemplate: vestingTemplateData
+    vestingTemplate: vestingTemplateData,
+    isPaused,
+    contractBalance,
+    totalAllocated
   } = useVestolink(vestolinkAddress)
   
   // Get token information
@@ -60,8 +63,12 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
     minutes: number
     seconds: number
   } | null>(null)
-  const [claiming, setClaiming] = useState(false)
+  const [claimingRegular, setClaimingRegular] = useState(false)
+  const [claimingEarly, setClaimingEarly] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [contractPaused, setContractPaused] = useState<boolean | null>(null)
+  const [contractBalanceAmount, setContractBalanceAmount] = useState<string>("0")
+  const [totalAllocatedAmount, setTotalAllocatedAmount] = useState<string>("0")
 
   // Load vesting data
   useEffect(() => {
@@ -180,6 +187,25 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
         } else {
           setClaimableAmount('0')
         }
+
+        // Set contract pause status
+        if (isPaused?.data !== undefined) {
+          setContractPaused(isPaused.data as boolean)
+        }
+
+        // Set contract balance
+        if (contractBalance?.data) {
+          const balance = contractBalance.data.toString()
+          const formattedBalance = (Number(balance) / 1e18).toString()
+          setContractBalanceAmount(formattedBalance)
+        }
+
+        // Set total allocated
+        if (totalAllocated?.data) {
+          const allocated = totalAllocated.data.toString()
+          const formattedAllocated = (Number(allocated) / 1e18).toString()
+          setTotalAllocatedAmount(formattedAllocated)
+        }
       } catch (error) {
         console.error("Error loading vesting data:", error)
         // Set fallback data
@@ -210,7 +236,7 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
     }
 
     loadVestingData()
-  }, [account, vestolinkAddress, vestingSchedule?.data, claimableAmountData?.data, tokenData?.name?.data, tokenData?.symbol?.data, tokenAddress?.data, vestingTemplateData?.data])
+  }, [account, vestolinkAddress, vestingSchedule?.data, claimableAmountData?.data, tokenData?.name?.data, tokenData?.symbol?.data, tokenAddress?.data, vestingTemplateData?.data, isPaused?.data, contractBalance?.data, totalAllocated?.data])
 
   // Update countdown timer
   useEffect(() => {
@@ -250,23 +276,65 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
       return
     }
 
-    setClaiming(true)
+    // Pre-flight checks
+    if (!claimableAmount || Number(claimableAmount) <= 0) {
+      alert('No tokens are currently available to claim.')
+      return
+    }
+
+    if (!vestingData?.totalAmount || Number(vestingData.totalAmount) <= 0) {
+      alert('You do not have any tokens allocated in this contract.')
+      return
+    }
+
+    // Debug information
+    console.log('Regular claim attempt:', {
+      user: account,
+      contract: vestolinkAddress,
+      claimableAmount: claimableAmount,
+      totalAmount: vestingData.totalAmount,
+      claimedAmount: vestingData.claimedAmount,
+      templateId: vestingData.templateId
+    })
+
+    setClaimingRegular(true)
     try {
-      await claimTokens.writeContractAsync({
+      const txHash = await claimTokens.writeContractAsync({
         address: vestolinkAddress,
         abi: VESTOLINK_ABI,
         functionName: 'claimTokens',
       })
 
+      console.log('Claim transaction submitted:', txHash)
+      alert('Claim transaction submitted! Please wait for confirmation.')
+
       // Refresh data after successful claim
       setTimeout(() => {
         window.location.reload()
-      }, 2000)
+      }, 3000)
     } catch (error: any) {
-      console.error("Claim error:", error)
-      alert(`Claim failed: ${error.message}`)
+      console.error("Claim error details:", error)
+      
+      // Try to extract more meaningful error messages
+      let errorMessage = 'Claim failed'
+      
+      if (error.message?.includes('User rejected')) {
+        errorMessage = 'Transaction was rejected by user'
+      } else if (error.message?.includes('insufficient funds')) {
+        errorMessage = 'Insufficient funds for transaction'
+      } else if (error.message?.includes('execution reverted')) {
+        errorMessage = 'Contract execution failed - no tokens may be available to claim yet'
+      } else if (error.message?.includes('Internal JSON-RPC error')) {
+        errorMessage = 'Network error - please check your connection and try again'
+      } else if (error.shortMessage) {
+        errorMessage = error.shortMessage
+      } else if (error.reason) {
+        errorMessage = error.reason
+      }
+
+      alert(`${errorMessage}\n\nPlease check:\n• Tokens are unlocked and claimable\n• You haven't already claimed all available tokens\n• Your wallet has sufficient gas`)
     } finally {
-      setClaiming(false)
+      setClaimingRegular(false)
     }
   }
 
@@ -276,23 +344,108 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
       return
     }
 
-    setClaiming(true)
+    // Pre-flight checks
+    if (contractPaused) {
+      alert('The contract is currently paused. Early claims are not available.')
+      return
+    }
+
+    if (!vestingTemplate?.earlyClaimEnabled) {
+      alert('Early claim is not enabled for this vesting contract.')
+      return
+    }
+
+    if (!vestingTemplate?.earlyClaimPercentage || vestingTemplate.earlyClaimPercentage <= 0) {
+      alert('Early claim percentage is not configured.')
+      return
+    }
+
+    if (vestingData?.airdropClaimed) {
+      alert('You have already claimed your early allocation.')
+      return
+    }
+
+    if (!vestingData?.totalAmount || Number(vestingData.totalAmount) <= 0) {
+      alert('You do not have any tokens allocated in this contract.')
+      return
+    }
+
+    if (vestingData?.revoked) {
+      alert('Your vesting schedule has been revoked.')
+      return
+    }
+
+    // Check if contract has sufficient balance
+    const totalUserAmount = Number(vestingData.totalAmount) / 1e18
+    const earlyClaimAmount = (totalUserAmount * vestingTemplate.earlyClaimPercentage) / 100
+    
+    if (Number(contractBalanceAmount) < earlyClaimAmount) {
+      alert(`Insufficient contract balance. Contract has ${contractBalanceAmount} tokens but you need ${earlyClaimAmount.toFixed(6)} tokens for early claim.`)
+      return
+    }
+
+    // Check if using correct template ID
+    const userTemplateId = Number(vestingData.templateId)
+    if (userTemplateId !== 1) {
+      console.warn(`User template ID is ${userTemplateId}, but we're checking template 1. This might be the issue.`)
+    }
+
+    // Debug information
+    console.log('Early claim attempt:', {
+      user: account,
+      contract: vestolinkAddress,
+      contractPaused: contractPaused,
+      contractBalance: contractBalanceAmount,
+      totalAllocated: totalAllocatedAmount,
+      earlyClaimEnabled: vestingTemplate.earlyClaimEnabled,
+      earlyClaimPercentage: vestingTemplate.earlyClaimPercentage,
+      earlyClaimAmount: earlyClaimAmount,
+      airdropClaimed: vestingData.airdropClaimed,
+      totalAmount: vestingData.totalAmount,
+      totalAmountFormatted: totalUserAmount,
+      templateId: vestingData.templateId,
+      revoked: vestingData.revoked,
+      isActive: vestingTemplate.isActive
+    })
+
+    setClaimingEarly(true)
     try {
-      await claimTokens.writeContractAsync({
+      const txHash = await claimTokens.writeContractAsync({
         address: vestolinkAddress,
         abi: VESTOLINK_ABI,
-        functionName: 'claimEarlyClaim', // Use the specific early claim function
+        functionName: 'claimEarlyClaim',
       })
+
+      console.log('Early claim transaction submitted:', txHash)
+      alert('Early claim transaction submitted! Please wait for confirmation.')
 
       // Refresh data after successful claim
       setTimeout(() => {
         window.location.reload()
-      }, 2000)
+      }, 3000)
     } catch (error: any) {
-      console.error("Early claim error:", error)
-      alert(`Early claim failed: ${error.message}`)
+      console.error("Early claim error details:", error)
+      
+      // Try to extract more meaningful error messages
+      let errorMessage = 'Early claim failed'
+      
+      if (error.message?.includes('User rejected')) {
+        errorMessage = 'Transaction was rejected by user'
+      } else if (error.message?.includes('insufficient funds')) {
+        errorMessage = 'Insufficient funds for transaction gas'
+      } else if (error.message?.includes('execution reverted')) {
+        errorMessage = 'Contract execution failed - you may not be eligible for early claim or have already claimed'
+      } else if (error.message?.includes('Internal JSON-RPC error')) {
+        errorMessage = 'Network/Contract error - please check the debug info and contract state'
+      } else if (error.shortMessage) {
+        errorMessage = error.shortMessage
+      } else if (error.reason) {
+        errorMessage = error.reason
+      }
+
+      alert(`${errorMessage}\n\nDebug info:\n• Contract paused: ${contractPaused}\n• Contract balance: ${contractBalanceAmount}\n• Your template ID: ${vestingData?.templateId}\n• Early claim amount needed: ${earlyClaimAmount.toFixed(6)}`)
     } finally {
-      setClaiming(false)
+      setClaimingEarly(false)
     }
   }
 
@@ -433,29 +586,77 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
               </div>
 
               <div className="space-y-4">
-                {Number.parseFloat(claimableAmount) > 0 ? (
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={handleClaim}
-                    disabled={claiming}
-                    className="w-full py-3 sm:py-4 bg-primary-500 text-slate-900 rounded-2xl font-bold text-base sm:text-lg hover:bg-primary-400 transition-all duration-200 flex items-center justify-center space-x-3 shadow-lg shadow-primary-500/25 disabled:opacity-50"
-                  >
-                    {claiming ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
-                        <span>Claiming...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-5 sm:w-6 h-5 sm:h-6" />
-                        <span>Claim Tokens</span>
-                      </>
-                    )}
-                  </motion.button>
-                ) : (
-                  // Check if user is a beneficiary (has total amount > 0) or not a beneficiary at all
-                  vestingData && Number.parseFloat(vestingData.totalAmount) > 0 ? (
+                {/* Check if user is a beneficiary (has total amount > 0) or not a beneficiary at all */}
+                {vestingData && Number.parseFloat(vestingData.totalAmount) > 0 ? (
+                  // User IS a beneficiary - check if tokens are claimable or not
+                  Number.parseFloat(claimableAmount) > 0 && Number.parseFloat(contractBalanceAmount) > 0 ? (
+                    // Tokens are claimable AND contract has balance - show buttons
+                    <>
+                      {/* Early Claim Button - Only show if earlyClaimEnabled AND earlyClaimPercentage > 0 AND not already claimed */}
+                      {vestingTemplate.earlyClaimEnabled && 
+                       vestingTemplate.earlyClaimPercentage > 0 && 
+                       !vestingData.airdropClaimed && (
+                        <motion.button
+                          whileHover={{ scale: 1.02 }}
+                          whileTap={{ scale: 0.98 }}
+                          onClick={handleEarlyClaim}
+                          disabled={claimingEarly}
+                          className="w-full py-3 sm:py-4 bg-blue-500 text-white rounded-2xl font-bold text-base sm:text-lg hover:bg-blue-400 transition-all duration-200 flex items-center justify-center space-x-3 shadow-lg shadow-blue-500/25 disabled:opacity-50"
+                        >
+                          {claimingEarly ? (
+                            <>
+                              <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                              <span>Claiming...</span>
+                            </>
+                          ) : (
+                            <>
+                              <Award className="w-5 sm:w-6 h-5 sm:h-6" />
+                              <span>Claim Early ({vestingTemplate.earlyClaimPercentage}%)</span>
+                            </>
+                          )}
+                        </motion.button>
+                      )}
+
+                      {/* Regular Claim Button */}
+                      <motion.button
+                        whileHover={{ scale: 1.02 }}
+                        whileTap={{ scale: 0.98 }}
+                        onClick={handleClaim}
+                        disabled={claimingRegular}
+                        className="w-full py-3 sm:py-4 bg-primary-500 text-slate-900 rounded-2xl font-bold text-base sm:text-lg hover:bg-primary-400 transition-all duration-200 flex items-center justify-center space-x-3 shadow-lg shadow-primary-500/25 disabled:opacity-50"
+                      >
+                        {claimingRegular ? (
+                          <>
+                            <div className="w-5 h-5 border-2 border-slate-900 border-t-transparent rounded-full animate-spin" />
+                            <span>Claiming...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Coins className="w-5 sm:w-6 h-5 sm:h-6" />
+                            <span>Claim Tokens</span>
+                          </>
+                        )}
+                      </motion.button>
+                    </>
+                  ) : Number.parseFloat(contractBalanceAmount) === 0 ? (
+                    // User IS a beneficiary but contract has no balance
+                    <div className="w-full py-4 sm:py-6 bg-red-900/20 rounded-2xl border border-red-500/30 text-center">
+                      <div className="flex items-center justify-center space-x-2 mb-2">
+                        <ExternalLink className="w-5 h-5 text-red-400" />
+                        <span className="text-red-400 font-semibold">Contract Not Funded</span>
+                      </div>
+                      <p className="text-gray-300 text-sm mb-3">
+                        This vesting contract has not been funded with tokens yet.
+                      </p>
+                      <p className="text-gray-400 text-xs mb-3">
+                        Required balance: <span className="text-white font-semibold">{Number(totalAllocatedAmount).toFixed(2)} {tokenInfo.symbol}</span><br/>
+                        Current balance: <span className="text-red-400 font-semibold">{Number(contractBalanceAmount).toFixed(2)} {tokenInfo.symbol}</span>
+                      </p>
+                      <p className="text-yellow-400 text-xs">
+                        Contact the project administrator to fund this contract with tokens.
+                      </p>
+                    </div>
+                  ) : (
                     // User IS a beneficiary but tokens aren't claimable yet
                     <div className="w-full py-4 sm:py-6 bg-slate-800/50 rounded-2xl border border-yellow-500/30 text-center">
                       <div className="flex items-center justify-center space-x-2 mb-2">
@@ -479,43 +680,21 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
                         </p>
                       )}
                     </div>
-                  ) : (
-                    // User is NOT a beneficiary of this contract
-                    <div className="w-full py-4 sm:py-6 bg-red-900/20 rounded-2xl border border-red-500/30 text-center">
-                      <div className="flex items-center justify-center space-x-2 mb-2">
-                        <ExternalLink className="w-5 h-5 text-red-400" />
-                        <span className="text-red-400 font-semibold">Not a Beneficiary</span>
-                      </div>
-                      <p className="text-gray-300 text-sm mb-3">
-                        Your wallet address is not a beneficiary of this vesting contract.
-                      </p>
-                      <p className="text-gray-400 text-xs">
-                        Please check if you have the correct wallet connected or contact the project administrator.
-                      </p>
-                    </div>
                   )
-                )}
-
-                {vestingTemplate.earlyClaimEnabled && !vestingData.airdropClaimed && (
-                  <motion.button
-                    whileHover={{ scale: 1.02 }}
-                    whileTap={{ scale: 0.98 }}
-                    onClick={handleEarlyClaim}
-                    disabled={claiming}
-                    className="w-full py-3 sm:py-4 bg-blue-500 text-white rounded-2xl font-bold text-base sm:text-lg hover:bg-blue-400 transition-all duration-200 flex items-center justify-center space-x-3 shadow-lg shadow-blue-500/25 disabled:opacity-50"
-                  >
-                    {claiming ? (
-                      <>
-                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        <span>Claiming...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Award className="w-5 sm:w-6 h-5 sm:h-6" />
-                        <span>Claim Early ({vestingTemplate.earlyClaimPercentage}%)</span>
-                      </>
-                    )}
-                  </motion.button>
+                ) : (
+                  // User is NOT a beneficiary of this contract
+                  <div className="w-full py-4 sm:py-6 bg-red-900/20 rounded-2xl border border-red-500/30 text-center">
+                    <div className="flex items-center justify-center space-x-2 mb-2">
+                      <ExternalLink className="w-5 h-5 text-red-400" />
+                      <span className="text-red-400 font-semibold">Not a Beneficiary</span>
+                    </div>
+                    <p className="text-gray-300 text-sm mb-3">
+                      Your wallet address is not a beneficiary of this vesting contract.
+                    </p>
+                    <p className="text-gray-400 text-xs">
+                      Please check if you have the correct wallet connected or contact the project administrator.
+                    </p>
+                  </div>
                 )}
               </div>
 
@@ -692,7 +871,7 @@ export default function ClaimPage({ params }: { params: { address: string } }) {
                     {Math.floor(Number(vestingTemplate.releaseInterval) / (24 * 60 * 60))} days
                   </span>
                 </div>
-                {vestingTemplate.earlyClaimEnabled && (
+                {vestingTemplate.earlyClaimEnabled && vestingTemplate.earlyClaimPercentage > 0 && (
                   <div className="flex justify-between">
                     <span className="text-gray-400">Early Claim:</span>
                     <span className="text-white">{vestingTemplate.earlyClaimPercentage}%</span>

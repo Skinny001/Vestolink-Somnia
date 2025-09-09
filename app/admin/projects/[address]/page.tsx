@@ -8,6 +8,7 @@ import { useAccount, useConnect } from 'wagmi'
 import { useVestolink, useToken } from '@/lib/hooks/useContracts'
 import { formatTokenAmount, shortenAddress } from "@/lib/utils"
 import { getExplorerUrl, VESTOLINK_ABI } from '@/lib/web3'
+import FundContract from '@/components/FundContract'
 
 interface BeneficiaryData {
   address: string
@@ -47,7 +48,7 @@ export default function ProjectManagePage({ params }: { params: { address: strin
   const vestolinkAddress = params.address as `0x${string}`
   
   // Use contract hooks - some are commented out until you add functions to smart contract
-  const { vestingSchedule, beneficiaryCount, tokenAddress } = useVestolink(vestolinkAddress)
+  const { vestingSchedule, beneficiaryCount, tokenAddress, contractBalance, totalAllocated } = useVestolink(vestolinkAddress)
   // 🚧 COMMENTED OUT - UNCOMMENT WHEN YOU ADD THESE FUNCTIONS TO YOUR SMART CONTRACT:
   // const { vestingTemplate, pauseContract, unpauseContract, addBeneficiaries } = useVestolink(vestolinkAddress)
   
@@ -492,6 +493,23 @@ export default function ProjectManagePage({ params }: { params: { address: strin
                 </div>
               </div>
             </div>
+
+            {/* Fund Contract Section - Show if contract balance is insufficient */}
+            {contractBalance?.data !== undefined && totalAllocated?.data !== undefined && (
+              (() => {
+                const balance = Number(contractBalance.data.toString()) / 1e18
+                const allocated = Number(totalAllocated.data.toString()) / 1e18
+                return balance < allocated ? (
+                  <FundContract
+                    tokenAddress={projectData.tokenAddress}
+                    vestingAddress={projectData.address}
+                    tokenSymbol={projectData.tokenSymbol}
+                    requiredAmount={allocated.toString()}
+                    currentBalance={balance.toString()}
+                  />
+                ) : null
+              })()
+            )}
           </div>
         )}
 

@@ -229,8 +229,121 @@ export default function DeployProject() {
   }
 
   const nextStep = () => {
+    // Validate current step before proceeding
+    if (!validateCurrentStep()) {
+      return
+    }
+    
     if (currentStep < steps.length) {
       setCurrentStep(currentStep + 1)
+    }
+  }
+
+  // Validation function for each step
+  const validateCurrentStep = (): boolean => {
+    switch (currentStep) {
+      case 1: // Network & Token step
+        if (!tokenType) {
+          alert("Please select a token type (New Token or Existing Token)")
+          return false
+        }
+        if (tokenType === "new") {
+          if (!formData.tokenName.trim()) {
+            alert("Token name is required")
+            return false
+          }
+          if (!formData.tokenSymbol.trim()) {
+            alert("Token symbol is required")
+            return false
+          }
+          if (!formData.totalSupply.trim() || Number(formData.totalSupply) <= 0) {
+            alert("Total supply must be greater than 0")
+            return false
+          }
+        } else if (tokenType === "existing") {
+          if (!formData.existingTokenAddress.trim()) {
+            alert("Existing token address is required")
+            return false
+          }
+          // Basic ethereum address validation
+          if (!/^0x[a-fA-F0-9]{40}$/.test(formData.existingTokenAddress)) {
+            alert("Please enter a valid Ethereum address")
+            return false
+          }
+        }
+        return true
+
+      case 2: // Vesting Config step
+        if (!formData.startTime) {
+          alert("Start time is required")
+          return false
+        }
+        if (!formData.cliffDuration.trim()) {
+          alert("Cliff duration is required")
+          return false
+        }
+        if (Number(formData.cliffDuration) < 0) {
+          alert("Cliff duration must be 0 or greater")
+          return false
+        }
+        if (!formData.totalDuration.trim() || Number(formData.totalDuration) <= 0) {
+          alert("Total duration must be greater than 0")
+          return false
+        }
+        if (!formData.releaseInterval.trim() || Number(formData.releaseInterval) <= 0) {
+          alert("Release interval must be greater than 0")
+          return false
+        }
+        if (Number(formData.cliffDuration) >= Number(formData.totalDuration)) {
+          alert("Cliff duration must be less than total duration")
+          return false
+        }
+        // Early claim percentage is optional, but if provided should be valid
+        if (formData.earlyClaimPercent.trim() && (Number(formData.earlyClaimPercent) < 0 || Number(formData.earlyClaimPercent) > 100)) {
+          alert("Early claim percentage must be between 0 and 100")
+          return false
+        }
+        return true
+
+      case 3: // Beneficiaries step - optional, but if provided should be valid
+        const validBeneficiaries = formData.beneficiaries.filter(b => b.address.trim() && b.amount.trim())
+        for (let i = 0; i < validBeneficiaries.length; i++) {
+          const beneficiary = validBeneficiaries[i]
+          if (!/^0x[a-fA-F0-9]{40}$/.test(beneficiary.address)) {
+            alert(`Invalid address for beneficiary ${i + 1}`)
+            return false
+          }
+          if (Number(beneficiary.amount) <= 0) {
+            alert(`Amount for beneficiary ${i + 1} must be greater than 0`)
+            return false
+          }
+        }
+        return true
+
+      default:
+        return true
+    }
+  }
+
+  // Check if we can proceed to next step
+  const canProceedToNext = (): boolean => {
+    switch (currentStep) {
+      case 1:
+        if (!tokenType) return false
+        if (tokenType === "new") {
+          return !!(formData.tokenName.trim() && formData.tokenSymbol.trim() && formData.totalSupply.trim() && Number(formData.totalSupply) > 0)
+        } else {
+          return !!(formData.existingTokenAddress.trim() && /^0x[a-fA-F0-9]{40}$/.test(formData.existingTokenAddress))
+        }
+      case 2:
+        return !!(formData.startTime && formData.cliffDuration.trim() && formData.totalDuration.trim() && 
+                  formData.releaseInterval.trim() && Number(formData.totalDuration) > 0 && 
+                  Number(formData.releaseInterval) > 0 && Number(formData.cliffDuration) >= 0 &&
+                  Number(formData.cliffDuration) < Number(formData.totalDuration))
+      case 3:
+        return true // Beneficiaries are optional
+      default:
+        return true
     }
   }
 
@@ -594,6 +707,7 @@ export default function DeployProject() {
           {currentStep === 1 && (
             <div>
               <h3 className="text-xl font-semibold text-white mb-6">Network & Token Setup</h3>
+              <p className="text-gray-400 text-sm mb-6">* Required fields must be completed to proceed to the next step</p>
               
               {/* Network Selection */}
               <div className="mb-6">
@@ -666,32 +780,36 @@ export default function DeployProject() {
               {tokenType === "new" && (
                 <div className="space-y-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Token Name</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Token Name *</label>
                     <input
                       type="text"
                       value={formData.tokenName}
                       onChange={(e) => handleInputChange("tokenName", e.target.value)}
                       placeholder="e.g., My Company Token"
+                      required
                       className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Token Symbol</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Token Symbol *</label>
                     <input
                       type="text"
                       value={formData.tokenSymbol}
                       onChange={(e) => handleInputChange("tokenSymbol", e.target.value)}
                       placeholder="e.g., MCT"
+                      required
                       className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-2">Total Supply</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-2">Total Supply *</label>
                     <input
                       type="number"
                       value={formData.totalSupply}
                       onChange={(e) => handleInputChange("totalSupply", e.target.value)}
                       placeholder="e.g., 1000000"
+                      min="1"
+                      required
                       className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                     />
                   </div>
@@ -700,12 +818,14 @@ export default function DeployProject() {
 
               {tokenType === "existing" && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Token Contract Address</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Token Contract Address *</label>
                   <input
                     type="text"
                     value={formData.existingTokenAddress}
                     onChange={(e) => handleInputChange("existingTokenAddress", e.target.value)}
                     placeholder="0x..."
+                    required
+                    pattern="^0x[a-fA-F0-9]{40}$"
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                   />
                 </div>
@@ -716,43 +836,51 @@ export default function DeployProject() {
           {currentStep === 2 && (
             <div>
               <h3 className="text-xl font-semibold text-white mb-6">Vesting Configuration</h3>
+              <p className="text-gray-400 text-sm mb-6">* Required fields must be completed to proceed to the next step</p>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Start Time</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Start Time *</label>
                   <input
                     type="datetime-local"
                     value={formData.startTime}
                     onChange={(e) => handleInputChange("startTime", e.target.value)}
+                    required
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white focus:outline-none focus:border-primary-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Cliff Duration (days)</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Cliff Duration (days) *</label>
                   <input
                     type="number"
                     value={formData.cliffDuration}
                     onChange={(e) => handleInputChange("cliffDuration", e.target.value)}
                     placeholder="30"
+                    min="0"
+                    required
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Total Duration (days)</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Total Duration (days) *</label>
                   <input
                     type="number"
                     value={formData.totalDuration}
                     onChange={(e) => handleInputChange("totalDuration", e.target.value)}
                     placeholder="365"
+                    min="1"
+                    required
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-300 mb-2">Release Interval (days)</label>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Release Interval (days) *</label>
                   <input
                     type="number"
                     value={formData.releaseInterval}
                     onChange={(e) => handleInputChange("releaseInterval", e.target.value)}
                     placeholder="30"
+                    min="1"
+                    required
                     className="w-full px-3 py-2 bg-slate-700 border border-slate-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-primary-500"
                   />
                 </div>
@@ -896,7 +1024,7 @@ export default function DeployProject() {
         </button>
         <button
           onClick={nextStep}
-          disabled={currentStep === steps.length || (currentStep === 1 && !tokenType)}
+          disabled={currentStep === steps.length || !canProceedToNext()}
           className="px-6 py-3 bg-primary-500 text-slate-900 rounded-xl font-semibold hover:bg-primary-400 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
         >
           Next
